@@ -47,13 +47,15 @@ class gdDataset(Dataset):
         assert(not (train_mode==False and tokenizer==None)), \
             'tokenizer must be provided to gdDataset if train_mode == False'
         self.df = df
+        self.bert_max_length = 25
         self.train_mode = train_mode
         self.image_path = image_path
         self.transforms = transforms
-        self.tokenizer = tokenizer if tokenizer else self._get_tfidf_vectorizer()
         self.bert_model_name = bert_model_name
-        self.bert_max_length = 25
+        self.tokenizer = tokenizer if tokenizer else self._get_tfidf_vectorizer()
         self.bert_tokenizer = BertTokenizer.from_pretrained(self.bert_model_name)
+        self.num_classes = self.df.classes.nunique()
+        # TODO : create a label_map dictionary
         
     def __len__(self):
         return self.df.__len__()
@@ -79,35 +81,42 @@ class gdDataset(Dataset):
         # TODO : add text cleaning methods here
         pass
     
-    
+    def _get_label_bert_embeddings(self, label):
+        # TODO
+        pass
+        
     def _get_bert_input_ids(self, text):
         # returns the input_ids for BertModel using BertTokenizer
         input_ids = self.bert_tokenizer.encode(text,
                                           return_tensors='pt',
                                           pad_to_max_length=True,
                                           max_length=self.bert_max_length)
+        input_ids.squeeze_(0)
         return input_ids
     
     def _get_tfidf_vector(self, text):
         tfidf_vector = self.tokenizer.texts_to_matrix([text], mode='tfidf')
-        tfidf_vector = torch.tensor(tfidf_vector).squeeze(0)
+        tfidf_vector = torch.tensor(tfidf_vector, dtype=torch.float32).squeeze(0)
         return tfidf_vector
     
     def _get_tfidf_vectorizer(self):
         '''
         Should be used only when using trainind data.
         Fits a tokenizer object on the texts to create tfidf vectors.
+        The vectorizer skips tokens that appear only once in the corpus.
+            i.e. to be a valid term in the tf-idf matrix,
+            a term must appear atleast twice across all documents.
+            
         Returns
         -------
         tokenizer : keras.preprocessing.text.tokenizer
         '''
         corpus = list(self.df.text)
-        tokenizer = Tokenizer(oov_token='UNK')
+        # fit a tokenizer to get vocab size
+        tokenizer = Tokenizer()
+        tokenizer.fit_on_texts(corpus)
+        vocab_size = len([k for k,v in tokenizer.word_counts.items() if v > 1])
+        # fit tokenizer with reduced vocabulary
+        tokenizer = Tokenizer(num_words = vocab_size, oov_token = 'UNK')
         tokenizer.fit_on_texts(corpus)
         return tokenizer
-
-
-
-
-
-

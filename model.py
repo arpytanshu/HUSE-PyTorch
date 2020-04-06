@@ -133,71 +133,10 @@ def BertEmbeddingModel(model_name):
     # freeze parameters
     bert_model.requires_grad_(False)
     
-    return bert_model
-
+    out_dimension = bert_config.hidden_size
     
+    return bert_model, out_dimension
 
-def _mean_pooler(encoding):
-    return encoding.mean(dim=1)
-    
-def _max_pooler(encoding):
-    return encoding.max(dim=1).values
-
-def _max_mean_pooler(encoding):
-    return torch.cat((_max_pooler(encoding), _mean_pooler(encoding)), dim=1)
-
-
-def bert_embeddings_pooler(hidden_states, layers_to_use = [-1, -2, -3, -4], pooling_method = 'mean'):
-    '''
-    Concatenates embeddings from hidden layers whose index are provided in layers_to_use.
-    The embedding for each layer is pooled along the time / sequence dimension 
-        a/c to the pooling methods ['mean', 'max', 'max-mean']. Uses default 'mean' pooling.
-    
-    Parameters
-    ----------
-    hidden_states : List[torch.Tensor]
-        A list of 13 torch tensors of shape [ batch_size x sequence_length x hidden_size ]
-        hidden_states comes from output returned from the Transformers BertModel.
-    
-    Example
-    -------
-    This concatenate the embeddings from the last two layers for each token 
-    and then average all token embeddings for a sequence
-        
-        out = BertModel(input_ids)
-        hidden_states = out[2]
-        embeddings = bert_embeddings_pooler(hidden_states, layers_to_use=[-1, -2], pooling_method = 'max')
-        
-    Returns
-    -------
-    A torch tensor with concatenated embeddings from the specified layers and pooled across the tokens.
-    expected shape: [ batch_size x ( hidden_size * len(layers_to_use)) ]
-    
-    '''
-    assert (pooling_method in ['mean', 'max', 'max-mean']), \
-            "pooling methods needs to be one of 'max', 'mean' or 'max-mean'"
-            
-    if pooling_method   == 'max':       pool_fn = _max_pooler
-    elif pooling_method == 'max-mean':  pool_fn = _max_mean_pooler
-    elif pooling_method == 'mean':      pool_fn = _mean_pooler
-        
-    pooled = None
-    for layer in layers_to_use:
-        if pooled is None:
-            pooled = pool_fn(hidden_states[layer])
-        else:
-            pooled = torch.cat([pooled, pool_fn(hidden_states[layer])], dim=1)
-    
-    return pooled
-
-
-
-
-# temp code
-# import pickle
-# with open('/home/ansh/mtp/bert_out.pickle', 'rb') as f:
-#     out = pickle.load(f)
-# hidden_states = out[2]
 
 
 
@@ -208,23 +147,23 @@ HUSE model
 
 class HUSE_config():
     def __init__(self):
-        self.image_embed_dim = 1000
-        self.bert_hidden_dim = 768
-        self.num_bert_layers = 4
-        self.image_tower_hidden_dim = 512
-        self.text_tower_hidden_dim = 512
-        self.tfidf_dim = 2000
-        self.num_classes = 121
+        self.tfidf_dim = None
+        self.num_classes = None 
+        self.image_embed_dim = None
+        self.bert_hidden_dim = None
+        self.num_bert_layers = 4 # as in HUSE paper
+        self.image_tower_hidden_dim = 512 # as in HUSE paper
+        self.text_tower_hidden_dim = 512 # as in HUSE paper
     
     def __repr__(self):
         return ('Configuration object for HUSE model.\n'
-            'image_embed_dim:\t{}\n'
-            'bert_hidden_dim:\t{}\n'
-            'num_bert_layers:\t{}\n'
+            'image_embed_dim:\t\t\t{}\n'
+            'bert_hidden_dim:\t\t\t{}\n'
+            'num_bert_layers:\t\t\t{}\n'
             'image_tower_hidden_dim:\t{}\n'
             'text_tower_hidden_dim:\t{}\n'
-            'tfidf_dim:\t\t{}\n'
-            'num_classes:\t\t{}\n').format(
+            'tfidf_dim:\t\t\t\t{}\n'
+            'num_classes:\t\t\t\t{}\n').format(
             self.image_embed_dim, self.bert_hidden_dim,
             self.num_bert_layers, self.image_tower_hidden_dim,
             self.text_tower_hidden_dim, self.tfidf_dim,
@@ -286,7 +225,8 @@ class TextTower(nn.Module):
 
 class HUSE(nn.Module):
     def __init__(self, ImageEmbeddingModel, BertEmbeddingModel, config):
-        super(HUSE, self).__init__()        
+        super(HUSE, self).__init__()
+        self.config = config
         self.ImageEmbeddingModel = ImageEmbeddingModel
         self.BertEmbeddingModel = BertEmbeddingModel
         self.ImageTower = ImageTower(config)
@@ -296,13 +236,49 @@ class HUSE(nn.Module):
             out_features = config.num_classes)
         
 
-    def forward(self, image, text_tokenized, text_tfidf):
+    def forward(self, image, bert_input_ids, text_tfidf):
+        
+        with torch.no_grad():
+            _bert_out = self.BertEmbeddingModel(bert_input_ids)
+            _bert_embedding = self._bert_embeddings_pooler(_bert_out)
+            # return _bert_embedding
+            text_embedding = torch.cat([_bert_embedding, text_tfidf], dim=1)
+            image_embedding = self.ImageEmbeddingModel(image)    
 
-        _bert_embedding = self.BertEmbeddingModel(text_tokenized)
-        text_embedding = torch.cat([_bert_embedding, text_tfidf], dim=1)
-        image_embedding = self.ImageEmbeddingModel(image)         
         out1 = self.ImageTower(image_embedding)
         out2 = self.TextTower(text_embedding)
         out = self.shared_fc_layer(torch.cat([out1, out2], dim=1))
-        
+
         return out
+    
+    def _mean_pooler(self, encoding):
+        return encoding.mean(dim=1)
+    
+    def _bert_embeddings_pooler(self, bert_out):
+        '''
+        Concatenates embeddings from hidden layers whose index are provided in layers_to_use.
+        The embedding for each layer is mean pooled along the time / sequence dimension.
+        Example
+        -------
+        This concatenate the embeddings from the last config.num_bert_layers layers for each token 
+        and then average all token embeddings for a sequence.
+            out = BertModel(sinput_ids)
+            embeddings = bert_embeddings_pooler(out)
+        '''
+        hidden_states = bert_out[2]
+        layers_to_use = range(self.config.num_bert_layers, 0, -1)
+        
+        pooled = None
+        for layer in layers_to_use:
+            if pooled is None:
+                pooled = self._mean_pooler(hidden_states[layer])
+            else:
+                pooled = torch.cat([pooled, self._mean_pooler(hidden_states[layer])], dim=1)
+        
+        return pooled
+
+
+
+def get_params_to_learn(model):
+    return [name for name, param in model.named_parameters() if param.requires_grad == True]
+
