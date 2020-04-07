@@ -14,12 +14,6 @@ from torchvision import models
 from transformers import BertModel, BertConfig
 
 
-'''
-Methods / Classes for getting Image Embeddings
-We use pre-trained models trained on ImageNet from torchvision
-to get 1000-Dimentional vector representation for images.
-'''
-
 
 pretrained_imagenet_models = {
     'resnet18'      : models.resnet18,
@@ -28,8 +22,23 @@ pretrained_imagenet_models = {
     'resnext101'    : models.resnext101_32x8d,
     'resnext50'     : models.resnext50_32x4d,
     'default'       : models.resnet18
-}
+    }
 
+
+
+pretrained_bert_models = [  'bert-base-cased',
+                            'bert-large-cased',
+                            'bert-base-uncased',
+                            'bert-large-uncased',
+                            ]
+
+
+
+'''
+Methods for getting model for Image Embeddings
+We use pre-trained models trained on ImageNet from torchvision
+to get 1000-Dimentional vector representation for images.
+'''
 def ImageEmbeddingModel(model_name):
     '''
     Returns a PyTorch pre-trained model.
@@ -63,15 +72,9 @@ def ImageEmbeddingModel(model_name):
 
 
 
-
-
-
-
 '''
 Methods / Classes for getting BERT Embeddings text.
-'''
 
-'''
 NOTE:
 The HUSE paper described the text description for each sample (text modal)
 to be much greater than 512 tokens for the dataset it used { UPMC Food-101 } 
@@ -80,15 +83,6 @@ and thus required to extract 512 most important tokens from the text description
 However the textual description of the samples in the dataset shared with us is 
 much smaller than 512, thus eliminating the need for such token clipping.
 '''
-
-
-
-pretrained_bert_models = [  'bert-base-cased',
-                            'bert-large-cased',
-                            'bert-base-uncased',
-                            'bert-large-uncased',
-                            ]
-
 def BertEmbeddingModel(model_name):
     '''
     Returns a PyTorch pre-trained model.
@@ -139,13 +133,36 @@ def BertEmbeddingModel(model_name):
 
 
 
+def _mean_pooler(encoding):
+    return encoding.mean(dim=1)
+    
 
-'''
-HUSE model
-'''
+    
+def bert_embeddings_pooler(bert_out, num_layers_to_use):
+    '''
+    Concatenates embeddings from last N ( = num_layers_to_usehidden ) hidden layer states.
+    The embedding for each layer is mean pooled along the time / sequence dimension.
+    Example
+    -------
+    This concatenate the embeddings from the last num_layers_to_use layers for each token 
+    and then average all token embeddings for a sequence.
+        out = BertModel(input_ids)
+        embeddings = bert_embeddings_pooler(out, 4)
+    '''
+    hidden_states = bert_out[2]
+    layers_to_use = range(-num_layers_to_use, 0)    
+    pooled = None
+    for layer in layers_to_use:
+        if pooled is None:
+            pooled = _mean_pooler(hidden_states[layer])
+        else:
+            pooled = torch.cat([pooled, _mean_pooler(hidden_states[layer])], dim=1)
+    return pooled
+
 
 
 class HUSE_config():
+    
     def __init__(self):
         self.tfidf_dim = None
         self.num_classes = None 
@@ -154,6 +171,7 @@ class HUSE_config():
         self.num_bert_layers = 4 # as in HUSE paper
         self.image_tower_hidden_dim = 512 # as in HUSE paper
         self.text_tower_hidden_dim = 512 # as in HUSE paper
+    
     
     def __repr__(self):
         return ('Configuration object for HUSE model.\n'
@@ -171,10 +189,8 @@ class HUSE_config():
 
     
 
-'''
-Image Tower
-'''
 class ImageTower(nn.Module):
+    
     def __init__(self, config : HUSE_config):
         
         super(ImageTower, self).__init__()
@@ -188,6 +204,7 @@ class ImageTower(nn.Module):
         self.fc4 = nn.Linear(self.hidden_size, self.hidden_size)
         self.fc5 = nn.Linear(self.hidden_size, self.hidden_size)
 
+
     def forward(self, X):
         out = F.dropout( F.relu( self.fc1( X ) ), p = self.drop_prob, training = self.training)
         out = F.dropout( F.relu( self.fc2(out) ), p = self.drop_prob, training = self.training)
@@ -198,11 +215,11 @@ class ImageTower(nn.Module):
         return out
 
 
-'''
-Text Tower
-'''
+
 class TextTower(nn.Module):
+    
     def __init__(self, config : HUSE_config):
+        
         super(TextTower, self).__init__()
         
         self.drop_prob = 0.15
@@ -212,7 +229,9 @@ class TextTower(nn.Module):
         self.fc1 = nn.Linear(self.input_size, self.hidden_size)
         self.fc2 = nn.Linear(self.hidden_size, self.hidden_size)
 
+
     def forward(self, X):
+        
         out = F.relu(self.fc1(X))
         out = F.dropout(out, p = self.drop_prob, training = self.training)
         out = F.relu( self.fc2(out) )
@@ -221,64 +240,70 @@ class TextTower(nn.Module):
 
 
 
-
-
 class HUSE(nn.Module):
-    def __init__(self, ImageEmbeddingModel, BertEmbeddingModel, config):
+    
+    def __init__(self, config):
+        
         super(HUSE, self).__init__()
         self.config = config
-        self.ImageEmbeddingModel = ImageEmbeddingModel
-        self.BertEmbeddingModel = BertEmbeddingModel
+        
         self.ImageTower = ImageTower(config)
         self.TextTower = TextTower(config)
         self.shared_fc_layer = nn.Linear(
-            in_features = config.image_tower_hidden_dim + config.text_tower_hidden_dim,
-            out_features = config.num_classes)
+                in_features = config.image_tower_hidden_dim + config.text_tower_hidden_dim,
+                out_features = config.num_classes)
         
 
-    def forward(self, image, bert_input_ids, text_tfidf):
+    def forward(self, image_embedding, text_embedding):
         
-        with torch.no_grad():
-            _bert_out = self.BertEmbeddingModel(bert_input_ids)
-            _bert_embedding = self._bert_embeddings_pooler(_bert_out)
-            # return _bert_embedding
-            text_embedding = torch.cat([_bert_embedding, text_tfidf], dim=1)
-            image_embedding = self.ImageEmbeddingModel(image)    
-
         out1 = self.ImageTower(image_embedding)
         out2 = self.TextTower(text_embedding)
         out = self.shared_fc_layer(torch.cat([out1, out2], dim=1))
-
         return out
     
-    def _mean_pooler(self, encoding):
-        return encoding.mean(dim=1)
-    
-    def _bert_embeddings_pooler(self, bert_out):
-        '''
-        Concatenates embeddings from hidden layers whose index are provided in layers_to_use.
-        The embedding for each layer is mean pooled along the time / sequence dimension.
-        Example
-        -------
-        This concatenate the embeddings from the last config.num_bert_layers layers for each token 
-        and then average all token embeddings for a sequence.
-            out = BertModel(sinput_ids)
-            embeddings = bert_embeddings_pooler(out)
-        '''
-        hidden_states = bert_out[2]
-        layers_to_use = range(self.config.num_bert_layers, 0, -1)
-        
-        pooled = None
-        for layer in layers_to_use:
-            if pooled is None:
-                pooled = self._mean_pooler(hidden_states[layer])
-            else:
-                pooled = torch.cat([pooled, self._mean_pooler(hidden_states[layer])], dim=1)
-        
-        return pooled
-
 
 
 def get_params_to_learn(model):
-    return [name for name, param in model.named_parameters() if param.requires_grad == True]
+    
+    params_to_learn = []
+    for param in model.named_parameters():
+        if param.requires_grad:
+            params_to_learn.append(param)
+    return params_to_learn
 
+
+
+class ClassificationLoss(nn.Module):
+    
+    def __init__(self):
+        super(ClassificationLoss, self).__init__()
+        
+    def forward(self, input, target):
+        loss = F.cross_entropy(input, target)
+        return loss
+
+
+
+class CrossModalLoss(nn.Module):
+    
+    def __init__(self):
+        super(CrossModalLoss, self).__init__()
+        
+    def forward(self, image_UE, text_UE):
+        '''
+        image_UE: universal embeddings created using only images
+        text_UE : universal embeddings created using only text
+        '''
+        gap_loss = F.cosine_similarity(image_UE, text_UE).mean()
+        return gap_loss
+
+        
+
+class SemanticSimilarityLoss(nn.Module):
+    
+    def __init__(self):
+        super(SemanticSimilarityLoss, self).__init__()
+        
+    def forward(self, universal_embedding, semantic_graph):
+        # TODO
+        pass
