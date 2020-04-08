@@ -11,9 +11,8 @@ import model
 import torch
 import pandas as pd
 from torch.utils.data import DataLoader
-import torch.nn.functional as F
 
-df = pd.read_csv('./resources/validation_data.csv').sample(1000)
+df = pd.read_csv('./resources/validation_data.csv').sample(16)
 df.reset_index(drop=True, inplace=True)
 
 IMAGE_PATH = './resources/val_images/'
@@ -32,7 +31,7 @@ dataset = utils.gdDataset(df.copy(),
 dataloader = DataLoader(dataset, batch_size = BATCH_SIZE, shuffle = True)
 
 # create Semantic Graph
-S_G = utils.SemanticGraph(dataset.classes_map)
+A = utils.SemanticGraph(dataset.classes_map)
 
 
 # Create image and text feature extraction models
@@ -58,12 +57,7 @@ HUSE_config.num_classes     = dataset.num_classes
 
 HUSE_model = model.HUSE(HUSE_config)
 
-Loss1 = model.ClassificationLoss()
-Loss2 = model.CrossModalLoss()
-Loss3 = model.SemanticSimilarityLoss()
-
-
-
+EmbeddingLoss = model.EmbeddingSpaceLoss(A, HUSE_config) 
 
 
 
@@ -81,7 +75,7 @@ for batch in dataloader:
     image = batch[0]
     bert_input_ids = batch[1]
     tfidf_vector = batch[2] 
-    label = batch[3]
+    labels = batch[3].to(torch.int64)
 
     with torch.no_grad():
         image_embedding = ImageEmbeddingModel(image)
@@ -100,10 +94,16 @@ for batch in dataloader:
     UnivEmb_only_image = HUSE_model(image_embedding, torch.zeros(text_embedding.shape))
     UnivEmb_only_text  = HUSE_model(torch.zeros(image_embedding.shape), text_embedding)
     
+    # loss1 = model.ClassificationLoss()
+    # loss2 = model.CrossModalLoss()
+    # loss3 = model.SemanticSimilarityLoss(HUSE_config.margin, A)    
+
     
-    loss1 = Loss1(universal_embedding, label)
-    loss2 = Loss2(UnivEmb_only_image, UnivEmb_only_text)
-    loss3 = Loss3(universal_embedding)
+    # _ = loss1(universal_embedding, labels)
+    # _ = loss2(UnivEmb_only_image, UnivEmb_only_text)
+    # _ = loss3(universal_embedding, labels)
+    
+    loss = EmbeddingLoss(universal_embedding, UnivEmb_only_image, UnivEmb_only_text, labels)
     
     
     
@@ -113,6 +113,9 @@ for batch in dataloader:
     print('\t\t *** new batch *** \t\t')
     print('image_embedding',  image_embedding.shape)
     print('bert_embedding',  bert_embedding.shape)
-    
     print('text_embedding', text_embedding.shape)
+    
     print('universal_embedding', universal_embedding.shape)
+    print('universal_embedding', universal_embedding.shape)
+    print('loss', loss.shape)
+    

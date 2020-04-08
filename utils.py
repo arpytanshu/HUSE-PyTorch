@@ -44,6 +44,7 @@ image_transforms = {
 
 
 class gdDataset(Dataset):
+    
     def __init__(self, df, image_path,
                  train_mode = True,
                  bert_model_name = 'bert-base-uncased',
@@ -62,10 +63,6 @@ class gdDataset(Dataset):
         self.num_classes = self.df.classes.nunique()
         self.classes_map = self._get_label_map()
         self.df['classes_map'] = df.classes.map(self.classes_map)
-        
-        
-    def __len__(self):
-        return self.df.__len__()
     
     def __getitem__(self, idx):
         
@@ -73,22 +70,17 @@ class gdDataset(Dataset):
         # TODO : text = self.clean_text(text)
         tfidf_vector = self._get_tfidf_vector(text)
         bert_input_ids = self._get_bert_input_ids(text)
-
-        label = self.df.loc[idx, 'classes'] if self.train_mode else None
-        
+        label = self.df.loc[idx, 'classes_map'] if self.train_mode else None
         image_path = self.image_path + self.df.loc[idx, 'image']
         image = Image.open(image_path).convert('RGB')
         if self.transforms:
             image = self.transforms(image)
-
         return image, bert_input_ids, tfidf_vector, label
-
 
     def clean_text(self, text):
         # TODO : add text cleaning methods here
         pass
-    
-    
+
     def _get_bert_input_ids(self, text):
         # returns the input_ids for BertModel using BertTokenizer
         input_ids = self.bert_tokenizer.encode(text,
@@ -97,7 +89,6 @@ class gdDataset(Dataset):
                                           max_length=self.bert_max_length)
         input_ids.squeeze_(0)
         return input_ids
-    
     
     def _get_tfidf_vector(self, text):
         '''
@@ -112,7 +103,6 @@ class gdDataset(Dataset):
         tfidf_vector = self.tokenizer.texts_to_matrix([text], mode='tfidf')
         tfidf_vector = torch.tensor(tfidf_vector, dtype=torch.float32).squeeze(0)
         return tfidf_vector
-    
     
     def _get_tfidf_vectorizer(self):
         '''
@@ -151,6 +141,9 @@ class gdDataset(Dataset):
     def __repr__(self):
         # TODO
         return 'len:{} classes:{}'.format(len(self.df), self.num_classes)
+
+    def __len__(self):
+        return self.df.__len__()
 
 
 
@@ -207,11 +200,8 @@ class BertSentenceEncoder():
             pooling_fn = self._max_pooler
         else: # anythig else defaults to mean-pooling
             pooling_fn = self._mean_pooler
-            
         pooled = pooling_fn(encoded[2][layer])
-        
         return pooled
-
 
 
 
@@ -239,7 +229,6 @@ def SemanticGraph(classes_map):
     '''
 
     BE = BertSentenceEncoder('bert-base-uncased')
-    
     num_classes = classes_map.__len__()
     embed_dim = 3 * BE.model.pooler.dense.in_features
     
@@ -259,6 +248,5 @@ def SemanticGraph(classes_map):
         for ix in range(iy, num_classes):
             cos_sim = F.cosine_similarity(CNE[iy].reshape(1,-1), CNE[ix].reshape(1,-1))
             S_G[ix][iy] = S_G[iy][ix] = cos_sim
-    
     return S_G
 

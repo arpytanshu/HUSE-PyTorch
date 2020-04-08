@@ -42,32 +42,24 @@ to get 1000-Dimentional vector representation for images.
 def ImageEmbeddingModel(model_name):
     '''
     Returns a PyTorch pre-trained model.
-    Valid model names from torchvision can be added to pretrained_models dictionary.
-    
+    Valid model names from torchvision can be added to pretrained_models dictionary.    
     Parameters
-    ----------
-    
+    ----------    
     model_name : string
         A valid model name having an entry in the pretrained_models dictionary.
-        If the model_name provided is not valid, a default is used.
-        
+        If the model_name provided is not valid, a default is used.        
     features_extract : bool, optional
-         If True, sets requires_grad attribute of model's parameter to False
-                    
+         If True, sets requires_grad attribute of model's parameter to False                    
     '''
-
     if model_name not in pretrained_imagenet_models.keys():
         model_name = 'default'
         print('Invalid model name for ImageEmbeddingModel. Using default {}'.\
-              format(pretrained_imagenet_models.get('default')))
-        
-    model = pretrained_imagenet_models.get(model_name)(pretrained=True)
-    
+              format(pretrained_imagenet_models.get('default')))        
+
+    model = pretrained_imagenet_models.get(model_name)(pretrained=True)    
     # freeze model parameters
     model.requires_grad_(False)
-
     out_dimension = model.fc.out_features
-
     return model, out_dimension
 
 
@@ -85,50 +77,39 @@ much smaller than 512, thus eliminating the need for such token clipping.
 '''
 def BertEmbeddingModel(model_name):
     '''
-    Returns a PyTorch pre-trained model.
-    
+    Returns a PyTorch pre-trained model.    
     Parameters
     ----------
     model_name : string
         A valid bert model name from huggingface's transformers.
         see: https://huggingface.co/transformers/pretrained_models.html
-
     Returns
     -------
-    bert_model : A transformers Pre trained Bert model
-        
+    bert_model : A transformers Pre trained Bert model        
         usage:
         ------    
-        out = bert_model(input_tokens)
-        
+        out = bert_model(input_tokens)        
         input_tokens is a pytorch tensor of tokenized sentences that are to be embedded.
-            see : BertTokenizer
-            
+            see : BertTokenizer            
         out is a tuple of 3 elements.
             out[0] : last_hidden_state  of shape [ B x T x D ]
             out[1] : pooler_output      of shape [ B x D ]
             out[2] : hidden_states      13 tuples, one for each hidden layer
-                                    each tuple of shape [ B x T x D ] .
-                                    
+                                    each tuple of shape [ B x T x D ] .                                    
                                     B : batch_size
                                     T : sequence_length / time_dimension
-                                    D : hidden_size [ 768 for base model, 1024 for large model ]
-                                    
+                                    D : hidden_size [ 768 for base model, 1024 for large model ]                                    
                                     out[2][-1] : embeddings from last layer
                                     out[2][1] : embeddings from first layer
     '''
-    
     if model_name not in pretrained_bert_models:
         print('Invalid model name for BertEmbeddingModel. Using default bert-base-cased.')
         model_name = 'bert-base-cased'
     bert_config =       BertConfig.from_pretrained(model_name, output_hidden_states=True, training=False)
     bert_model =        BertModel.from_pretrained(model_name, config=bert_config)
-    
     # freeze parameters
     bert_model.requires_grad_(False)
-    
     out_dimension = bert_config.hidden_size
-    
     return bert_model, out_dimension
 
 
@@ -170,40 +151,37 @@ class HUSE_config():
         self.bert_hidden_dim = None
         self.num_bert_layers = 4 # as in HUSE paper
         self.image_tower_hidden_dim = 512 # as in HUSE paper
-        self.text_tower_hidden_dim = 512 # as in HUSE paper
-    
-    
+        self.text_tower_hidden_dim = 512 # as in HUSE paper        
+
+        # parameters for Losses
+        # ---------- --- ------
+        self.alpha = 0.33 # weight for classificaion loss
+        self.beta = 0.33 # weight for semantic similarity loss
+        self.gamma = 0.33 # loss for cross modal loss
+        self.margin = 0.8 # relaxation parameter for semantic similarity loss
+
     def __repr__(self):
-        return ('Configuration object for HUSE model.\n'
-            'image_embed_dim:\t\t\t{}\n'
-            'bert_hidden_dim:\t\t\t{}\n'
-            'num_bert_layers:\t\t\t{}\n'
-            'image_tower_hidden_dim:\t{}\n'
-            'text_tower_hidden_dim:\t{}\n'
-            'tfidf_dim:\t\t\t\t{}\n'
-            'num_classes:\t\t\t\t{}\n').format(
-            self.image_embed_dim, self.bert_hidden_dim,
-            self.num_bert_layers, self.image_tower_hidden_dim,
-            self.text_tower_hidden_dim, self.tfidf_dim,
-            self.num_classes)
+        string = []
+        for attr in dir(self):
+            if attr[0] != '_':
+                string.append(attr + ' : ' + str(eval('self.'+attr)))
+        return '\n'.join(string)
+    
 
     
 
 class ImageTower(nn.Module):
     
-    def __init__(self, config : HUSE_config):
-        
+    def __init__(self, config : HUSE_config):        
         super(ImageTower, self).__init__()
         self.drop_prob = 0.15
         self.input_size = config.image_embed_dim
-        self.hidden_size  = config.image_tower_hidden_dim
-        
+        self.hidden_size  = config.image_tower_hidden_dim        
         self.fc1 = nn.Linear(self.input_size, self.hidden_size)
         self.fc2 = nn.Linear(self.hidden_size, self.hidden_size)
         self.fc3 = nn.Linear(self.hidden_size, self.hidden_size)
         self.fc4 = nn.Linear(self.hidden_size, self.hidden_size)
         self.fc5 = nn.Linear(self.hidden_size, self.hidden_size)
-
 
     def forward(self, X):
         out = F.dropout( F.relu( self.fc1( X ) ), p = self.drop_prob, training = self.training)
@@ -218,20 +196,15 @@ class ImageTower(nn.Module):
 
 class TextTower(nn.Module):
     
-    def __init__(self, config : HUSE_config):
-        
-        super(TextTower, self).__init__()
-        
+    def __init__(self, config : HUSE_config):        
+        super(TextTower, self).__init__()        
         self.drop_prob = 0.15
         self.input_size = config.tfidf_dim + config.bert_hidden_dim*config.num_bert_layers
-        self.hidden_size  = config.text_tower_hidden_dim
-        
+        self.hidden_size  = config.text_tower_hidden_dim        
         self.fc1 = nn.Linear(self.input_size, self.hidden_size)
         self.fc2 = nn.Linear(self.hidden_size, self.hidden_size)
 
-
-    def forward(self, X):
-        
+    def forward(self, X):        
         out = F.relu(self.fc1(X))
         out = F.dropout(out, p = self.drop_prob, training = self.training)
         out = F.relu( self.fc2(out) )
@@ -243,7 +216,6 @@ class TextTower(nn.Module):
 class HUSE(nn.Module):
     
     def __init__(self, config):
-        
         super(HUSE, self).__init__()
         self.config = config
         
@@ -254,8 +226,7 @@ class HUSE(nn.Module):
                 out_features = config.num_classes)
         
 
-    def forward(self, image_embedding, text_embedding):
-        
+    def forward(self, image_embedding, text_embedding):        
         out1 = self.ImageTower(image_embedding)
         out2 = self.TextTower(text_embedding)
         out = self.shared_fc_layer(torch.cat([out1, out2], dim=1))
@@ -278,8 +249,12 @@ class ClassificationLoss(nn.Module):
     def __init__(self):
         super(ClassificationLoss, self).__init__()
         
-    def forward(self, input, target):
-        loss = F.cross_entropy(input, target)
+    def forward(self, UE, labels):
+        '''
+        UE : embeddings created from model
+        target: index corresponding to class names
+        '''
+        loss = F.cross_entropy(UE, labels)
         return loss
 
 
@@ -294,16 +269,108 @@ class CrossModalLoss(nn.Module):
         image_UE: universal embeddings created using only images
         text_UE : universal embeddings created using only text
         '''
-        gap_loss = F.cosine_similarity(image_UE, text_UE).mean()
-        return gap_loss
+        loss = F.cosine_similarity(image_UE, text_UE).mean()
+        return loss
 
         
 
 class SemanticSimilarityLoss(nn.Module):
     
-    def __init__(self):
+    def __init__(self, margin, A):
+        '''
+        A : Semantic Graph created from the class name embeddings
+        margin : relaxation margin        
+        '''
         super(SemanticSimilarityLoss, self).__init__()
+        self.margin = margin
+        self.A = A
         
-    def forward(self, universal_embedding, semantic_graph):
-        # TODO
-        pass
+    def forward(self, UE, labels):
+        '''
+        Parameters
+        ----------
+        UE : universal embeddings for samples in batch.
+        A  : tensor of size size [ num_classes x num_classes ]
+            Semantic Graph of distance between embedded class names
+        labels : index of sample's class name in Semantic Graph
+                 must have values between 0 & num_classes
+        
+        Example
+        -------
+        batch_size = 2
+        
+        We have 2 universal embedding and 2 labels in this batch.
+        UE = [UE_1 UE_2] # universal embeddings for batch samples
+        L =  [C_1 C_2]   # index corresponding to the class names of samples
+        
+        To calculate pairwise_embedding_distance, we create pairs of 
+        samples in batch and calc their cosine distances.
+        UE_m = UE.repeat_interleave(2, -1)  # [ UE_1  UE_1  UE_2  UE_2 ]
+        UE_n = UE.repeat(2,1)               # [ UE_1  UE_2  UE_1  UE_2 ]
+        pairwise_embedding_distance = distance( UE_m, UE_n )
+        
+        Similarly pairwise label index are used to index into the Semantic Graph A
+        L_m = labels.repeat_interleave(2, -1)   # [ C_1  C_1  C_2  C_2 ]
+        L_n = labels.repeat(2,1)                # [ C_1  C_2  C_1  C_2 ]
+        
+        pairwise_class_distance = A[[L_m, L_n]]
+        '''
+        
+        N = UE.shape[0] # batch size
+        
+        UE_m = UE.repeat_interleave(N, -2)
+        UE_n = UE.repeat(N,1)
+        pairwise_embedding_distance = F.cosine_similarity(UE_m, UE_n) # d (U_m , U_n )
+        
+        L_m = labels.repeat_interleave(N)
+        L_n = labels.repeat(N)
+        pairwise_class_distance = self.A[[L_m, L_n]]  # Aij
+
+        sigma = self._calc_sigma(pairwise_class_distance, pairwise_embedding_distance)
+        
+        # loss = Σ ( σ * (d(U_m,U_n) - Aij)² ) / N²
+        loss = (sigma * (pairwise_embedding_distance - pairwise_class_distance).pow(2)).mean() 
+        
+        return loss
+    
+    def _calc_sigma(self, pairwise_class_distance, pairwise_embedding_distance):
+        # calculate sigma as described in eq(10) in the HUSE paper.
+        sigma = ( pairwise_class_distance < self.margin ) & ( pairwise_embedding_distance < self.margin )
+        return sigma.to(torch.float32)
+
+
+
+class EmbeddingSpaceLoss(nn.Module):
+    
+    def __init__(self, A, config : HUSE_config):
+        '''
+        config : A HUSE_config object containing model configuration parameters
+        Parameters
+        ----------
+        A     : Semantic Graph of distance between embedded class names
+        alpha : weight to control influence of Classification Loss
+        beta  : weight to control influence of Semantic Similarity Loss
+        gamma : weight to control influence of Cross Modal Loss
+        margin : relaxation margin used in Semantic Similarity Loss
+        '''
+        super(EmbeddingSpaceLoss, self).__init__()
+        self.config = config
+        self.Loss1 = ClassificationLoss()
+        self.Loss2 = SemanticSimilarityLoss(self.config.margin, A)
+        self.Loss3 = CrossModalLoss()
+
+        
+    def forward(self, UE, UE_image, UE_text, labels):
+        '''
+        Parameters
+        ----------
+        UE : UE : universal embeddings for samples in batch.
+        UE_image : universal embeddings created using only image
+        UE_text : universal embeddings created using only text
+        labels : index corresponding to class names
+        '''
+        loss1 = self.config.alpha * self.Loss1(UE, labels)
+        loss2 = self.config.beta  * self.Loss2(UE, labels)
+        loss3 = self.config.gamma * self.Loss3(UE_image, UE_text)
+        loss = loss1 + loss2 + loss3
+        return loss        
