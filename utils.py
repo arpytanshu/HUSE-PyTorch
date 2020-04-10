@@ -139,7 +139,6 @@ class gdDataset(Dataset):
         return mapping
     
     def __repr__(self):
-        # TODO
         return 'len:{} classes:{}'.format(len(self.df), self.num_classes)
 
     def __len__(self):

@@ -235,7 +235,6 @@ class HUSE(nn.Module):
 
 
 def get_params_to_learn(model):
-    
     params_to_learn = []
     for param in model.named_parameters():
         if param.requires_grad:
@@ -276,14 +275,14 @@ class CrossModalLoss(nn.Module):
 
 class SemanticSimilarityLoss(nn.Module):
     
-    def __init__(self, margin, A):
+    def __init__(self, margin, A, device):
         '''
         A : Semantic Graph created from the class name embeddings
         margin : relaxation margin        
         '''
         super(SemanticSimilarityLoss, self).__init__()
         self.margin = margin
-        self.A = A
+        self.A = A.to(device)
         
     def forward(self, UE, labels):
         '''
@@ -315,7 +314,6 @@ class SemanticSimilarityLoss(nn.Module):
         
         pairwise_class_distance = A[[L_m, L_n]]
         '''
-        
         N = UE.shape[0] # batch size
         
         UE_m = UE.repeat_interleave(N, -2)
@@ -327,10 +325,8 @@ class SemanticSimilarityLoss(nn.Module):
         pairwise_class_distance = self.A[[L_m, L_n]]  # Aij
 
         sigma = self._calc_sigma(pairwise_class_distance, pairwise_embedding_distance)
-        
         # loss = Σ ( σ * (d(U_m,U_n) - Aij)² ) / N²
         loss = (sigma * (pairwise_embedding_distance - pairwise_class_distance).pow(2)).mean() 
-        
         return loss
     
     def _calc_sigma(self, pairwise_class_distance, pairwise_embedding_distance):
@@ -342,7 +338,7 @@ class SemanticSimilarityLoss(nn.Module):
 
 class EmbeddingSpaceLoss(nn.Module):
     
-    def __init__(self, A, config : HUSE_config):
+    def __init__(self, A, device, config : HUSE_config):
         '''
         config : A HUSE_config object containing model configuration parameters
         Parameters
@@ -356,7 +352,7 @@ class EmbeddingSpaceLoss(nn.Module):
         super(EmbeddingSpaceLoss, self).__init__()
         self.config = config
         self.Loss1 = ClassificationLoss()
-        self.Loss2 = SemanticSimilarityLoss(self.config.margin, A)
+        self.Loss2 = SemanticSimilarityLoss(self.config.margin, A, device)
         self.Loss3 = CrossModalLoss()
 
         
