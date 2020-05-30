@@ -179,3 +179,5 @@ For demonstrating how I implemented this loss, here is a simple example:
 - HUSE_config.beta
 - HUSE_config.gamma  
 ![alt text](https://raw.githubusercontent.com/arpytanshu/HUSE-PyTorch/master/resources/combined_loss.png)
+
+### .
